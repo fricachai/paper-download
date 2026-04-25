@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>期刊文章電子檔查找系統</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <section class="toolbar">
+      <div>
+        <h1>期刊文章電子檔查找系統</h1>
+        <p>輸入研究構面或關鍵字，依引用數排序搜尋期刊文章，並嘗試下載合法免費全文 PDF。</p>
+      </div>
+      <form class="search" method="get" action="/">
+        <input name="q" value="{{ keyword }}" placeholder="例如：transformational leadership creativity" autofocus>
+        <button type="submit">搜尋</button>
+      </form>
+    </section>
+
+    {% if message %}
+      <div class="notice {{ status }}">{{ message }}</div>
+    {% endif %}
+
+    {% if error %}
+      <div class="notice error">{{ error }}</div>
+    {% endif %}
+
+    {% if keyword and not articles and not error %}
+      <div class="empty">找不到結果，請改用英文關鍵字、同義詞或更具體的研究構面名稱。</div>
+    {% endif %}
+
+    {% if articles %}
+      <section class="results">
+        <div class="result-head">
+          <span>搜尋結果：{{ keyword }}</span>
+          <span>{{ articles|length }} 篇</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>年份</th>
+                <th>文章</th>
+                <th>期刊</th>
+                <th>引用數</th>
+                <th>OA</th>
+                <th>動作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for article in articles %}
+                <tr>
+                  <td class="year">{{ article.year }}</td>
+                  <td>
+                    <div class="title">{{ article.title }}</div>
+                    <div class="meta">{{ article.authors }}</div>
+                    {% if article.doi %}
+                      <div class="doi">DOI: {{ article.doi }}</div>
+                    {% endif %}
+                  </td>
+                  <td>{{ article.journal }}</td>
+                  <td class="cite">{{ article.cited_by_count }}</td>
+                  <td>
+                    {% if article.is_oa %}
+                      <span class="badge yes">有</span>
+                    {% else %}
+                      <span class="badge no">未確認</span>
+                    {% endif %}
+                  </td>
+                  <td class="actions">
+                    {% if article.doi %}
+                      <form method="post" action="/download">
+                        <input type="hidden" name="doi" value="{{ article.doi }}">
+                        <input type="hidden" name="keyword" value="{{ keyword }}">
+                        <button type="submit">下載 PDF</button>
+                      </form>
+                    {% endif %}
+                    {% if article.landing_page_url %}
+                      <a href="{{ article.landing_page_url }}" target="_blank" rel="noreferrer">來源</a>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  </main>
+</body>
+</html>

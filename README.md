@@ -34,6 +34,22 @@ pip install -r requirements.txt
 python paper_download.py
 ```
 
+## 啟動 Web 介面
+
+執行：
+
+```powershell
+python app.py
+```
+
+開啟：
+
+```text
+http://127.0.0.1:5000
+```
+
+在搜尋框輸入研究構面或關鍵字，系統會依引用數排序列出文章，並可針對有 DOI 的文章嘗試下載合法免費 PDF。
+
 如要使用 Unpaywall，建議設定 email：
 
 ```powershell
