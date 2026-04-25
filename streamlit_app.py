@@ -6,17 +6,6 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-from paper_download import (
-    SAVE_DIR,
-    candidate_pdf_urls,
-    clean_filename,
-    download_pdf,
-    get_crossref_metadata,
-    log_pending,
-    log_result,
-    normalize_doi,
-)
-
 
 st.set_page_config(
     page_title="期刊文章電子檔查找系統",
@@ -87,40 +76,14 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
     return articles[:limit]
 
 
-def build_filename(metadata: dict) -> str:
-    return f"{metadata['year']}_{clean_filename(metadata['title'])}.pdf"
-
-
-def ensure_pdf_file(doi: str) -> tuple[bool, str, str]:
-    doi = normalize_doi(doi)
-    metadata = get_crossref_metadata(doi)
-    SAVE_DIR.mkdir(parents=True, exist_ok=True)
-
-    file_name = build_filename(metadata)
-    file_path = SAVE_DIR / file_name
-
-    if file_path.exists():
-        log_result(metadata, "已存在", filename=file_name)
-        return True, f"檔案已存在：{file_name}", str(file_path)
-
-    for source, pdf_url in candidate_pdf_urls(metadata):
-        if download_pdf(pdf_url, file_path):
-            log_result(metadata, "已下載", source=source, pdf_url=pdf_url, filename=file_name)
-            return True, f"下載完成：{file_name}", str(file_path)
-
-    log_result(metadata, "待取得")
-    log_pending(metadata)
-    return False, "找不到合法免費 PDF，已記錄到待取得清單。", ""
-
-
 def copy_doi_button(doi: str, key: str) -> None:
     safe_doi = html.escape(doi, quote=True)
     encoded = base64.b64encode(doi.encode("utf-8")).decode("ascii")
     components.html(
         f"""
-        <div style="display:flex;align-items:center;gap:8px;width:100%;">
-          <code style="flex:1;background:#f6f8fa;border-radius:6px;padding:11px 12px;display:block;white-space:nowrap;overflow:auto;">{safe_doi}</code>
-          <button id="copy-{key}" style="border:1px solid #d0d7de;border-radius:6px;background:white;padding:9px 12px;cursor:pointer;">複製</button>
+        <div style="display:inline-flex;align-items:center;gap:8px;max-width:100%;">
+          <code style="background:#f6f8fa;border-radius:6px;padding:11px 12px;display:inline-block;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;">{safe_doi}</code>
+          <button id="copy-{key}" style="border:1px solid #d0d7de;border-radius:6px;background:white;padding:9px 12px;cursor:pointer;white-space:nowrap;">複製</button>
         </div>
         <script>
           const button = document.getElementById("copy-{key}");
@@ -136,37 +99,36 @@ def copy_doi_button(doi: str, key: str) -> None:
     )
 
 
-def render_download_controls(article: dict, index: int) -> None:
-    prepared_key = f"prepared-{index}"
-    if article["doi"]:
-        if st.button("查找合法 PDF", key=f"prepare-{index}"):
-            with st.spinner("正在查找並準備 PDF..."):
-                ok, message, file_path = ensure_pdf_file(article["doi"])
-            st.session_state[prepared_key] = {
-                "ok": ok,
-                "message": message,
-                "file_path": file_path,
-            }
+def external_button(label: str, url: str, disabled: bool = False) -> None:
+    if disabled or not url:
+        st.button(label, disabled=True)
+        return
 
-        prepared = st.session_state.get(prepared_key)
-        if prepared:
-            if prepared["ok"]:
-                st.success(prepared["message"])
-                with open(prepared["file_path"], "rb") as file:
-                    st.download_button(
-                        "下載合法 PDF",
-                        data=file,
-                        file_name=prepared["file_path"].split("\\")[-1].split("/")[-1],
-                        mime="application/pdf",
-                        key=f"download-{index}",
-                    )
-            else:
-                st.warning(prepared["message"])
-    else:
-        st.button("無 DOI", key=f"no-doi-{index}", disabled=True)
+    safe_url = html.escape(url, quote=True)
+    safe_label = html.escape(label)
+    st.markdown(
+        f"""
+        <a href="{safe_url}" target="_blank" rel="noreferrer"
+           style="display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 16px;border:1px solid #d0d7de;border-radius:6px;text-decoration:none;color:#31333f;background:#ffffff;white-space:nowrap;">
+          {safe_label}
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if article["landing_page_url"]:
-        st.link_button("開啟來源", article["landing_page_url"])
+
+def render_article_actions(article: dict, index: int) -> None:
+    if not article["doi"]:
+        st.caption("此筆資料沒有 DOI。")
+        return
+
+    cols = st.columns([2.4, 0.9, 0.9, 5.8])
+    with cols[0]:
+        copy_doi_button(article["doi"], f"{index}")
+    with cols[1]:
+        external_button("PDF電子檔", article["pdf_url"], disabled=not article["pdf_url"])
+    with cols[2]:
+        external_button("開啟來源", article["landing_page_url"], disabled=not article["landing_page_url"])
 
 
 def render_article(article: dict, index: int) -> None:
@@ -182,22 +144,11 @@ def render_article(article: dict, index: int) -> None:
         if article["journal"]:
             st.write(f"期刊：{article['journal']}")
 
-        if article["doi"]:
-            doi_cols = st.columns([4, 1])
-            with doi_cols[0]:
-                copy_doi_button(article["doi"], f"{index}")
-            with doi_cols[1]:
-                st.link_button("DOI 網址", f"https://doi.org/{article['doi']}")
-        else:
-            st.caption("此筆資料沒有 DOI。")
-
-        action_cols = st.columns([1.1, 5])
-        with action_cols[0]:
-            render_download_controls(article, index)
+        render_article_actions(article, index)
 
 
 st.title("期刊文章電子檔查找系統")
-st.write("輸入研究構面或關鍵字，優先列出相關性高且年份新的文章，並嘗試下載合法免費全文 PDF。")
+st.write("輸入研究構面或關鍵字，優先列出相關性高且年份新的文章。")
 
 with st.form("search-form"):
     cols = st.columns([4, 1, 1])
@@ -217,7 +168,7 @@ recent_year_map = {
     "不限年份": None,
 }
 
-st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。PDF 只會從合法免費來源下載。")
+st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。PDF電子檔只連到合法開放全文 URL。")
 
 if submitted and not keyword.strip():
     st.warning("請先輸入關鍵字或研究構面。")
