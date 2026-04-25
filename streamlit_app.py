@@ -76,12 +76,19 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
     return articles[:limit]
 
 
-def action_link(label: str, url: str, class_name: str) -> str:
+def action_link(label: str, url: str, class_name: str, extra_class: str = "") -> str:
     safe_label = html.escape(label)
-    if not url:
-        return f'<span class="{class_name} disabled">{safe_label}</span>'
     safe_url = html.escape(url, quote=True)
-    return f'<a class="{class_name}" href="{safe_url}" target="_blank" rel="noreferrer">{safe_label}</a>'
+    classes = f"{class_name} {extra_class}".strip()
+    return f'<a class="{classes}" href="{safe_url}" target="_blank" rel="noreferrer">{safe_label}</a>'
+
+
+def pdf_link_for_article(article: dict, class_name: str) -> str:
+    if article["pdf_url"]:
+        return action_link("PDF電子檔", article["pdf_url"], class_name)
+    if article["doi"]:
+        return action_link("PDF電子檔", f"https://doi.org/{article['doi']}", class_name, "missing-pdf")
+    return f'<span class="{class_name} missing-pdf disabled">PDF電子檔</span>'
 
 
 def render_article_actions(article: dict, index: int) -> None:
@@ -93,8 +100,8 @@ def render_article_actions(article: dict, index: int) -> None:
     button_class = f"action-button-{index}"
     safe_doi = html.escape(article["doi"], quote=True)
     encoded_doi = base64.b64encode(article["doi"].encode("utf-8")).decode("ascii")
-    pdf_button = action_link("PDF電子檔", article["pdf_url"], button_class)
-    source_button = action_link("開啟來源", article["landing_page_url"], button_class)
+    pdf_button = pdf_link_for_article(article, button_class)
+    source_button = action_link("開啟來源", article["landing_page_url"], button_class) if article["landing_page_url"] else ""
 
     components.html(
         f"""
@@ -133,6 +140,11 @@ def render_article_actions(article: dict, index: int) -> None:
             padding: 0 16px;
             text-decoration: none;
             white-space: nowrap;
+          }}
+          .{button_class}.missing-pdf {{
+            background: #fff1f2;
+            border-color: #f4b4bd;
+            color: #9f1239;
           }}
           .{button_class}.disabled {{
             color: #a0a4ad;
@@ -197,7 +209,7 @@ recent_year_map = {
     "不限年份": None,
 }
 
-st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。PDF電子檔只連到合法開放全文 URL。")
+st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。有合法開放 PDF 時按鈕直接開 PDF；沒有合法 PDF URL 時，淡紅色按鈕會開啟官方 DOI 頁面。")
 
 if submitted and not keyword.strip():
     st.warning("請先輸入關鍵字或研究構面。")
