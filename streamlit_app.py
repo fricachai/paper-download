@@ -87,7 +87,7 @@ def pdf_link_for_article(article: dict, class_name: str) -> str:
     if article["pdf_url"]:
         return action_link("PDF電子檔", article["pdf_url"], class_name)
     if article["doi"]:
-        return action_link("PDF電子檔", f"https://doi.org/{article['doi']}", class_name, "missing-pdf")
+        return action_link("PDF電子檔", f"http://localhost:8000/{article['doi']}", class_name, "missing-pdf")
     return f'<span class="{class_name} missing-pdf disabled">PDF電子檔</span>'
 
 
@@ -209,7 +209,7 @@ recent_year_map = {
     "不限年份": None,
 }
 
-st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。有合法開放 PDF 時按鈕直接開 PDF；沒有合法 PDF URL 時，淡紅色按鈕會開啟官方 DOI 頁面。")
+st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。有合法開放 PDF 時按鈕直接開 PDF；沒有合法 PDF URL 時，淡紅色按鈕會開啟本機 localhost:8000 DOI 路徑。")
 
 if submitted and not keyword.strip():
     st.warning("請先輸入關鍵字或研究構面。")
