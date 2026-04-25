@@ -1,13 +1,14 @@
 # Paper Download
 
-期刊文章電子檔查找系統。可用 DOI 批次查找，也可用 Streamlit Web 介面輸入關鍵字搜尋文章，並嘗試從合法免費來源下載全文 PDF。
+期刊文章電子檔查找系統。可用 Streamlit Web 介面輸入關鍵字搜尋文章，也可用 DOI 批次查找合法免費全文 PDF。
 
 ## 功能
 
 - 用關鍵字或研究構面搜尋期刊文章
-- 依 OpenAlex 引用數由高到低排序
-- 顯示年份、篇名、作者、期刊、引用數、DOI、OA 狀態
-- 透過 Crossref 取得文章年份與篇名
+- 搜尋結果先依相關性由高到低排序，再依年份由新到舊排序
+- 預設搜尋近 5 年文章，可改為近 3 年、近 10 年或不限年份
+- 顯示年份、篇名、作者、期刊、相關性、引用數、DOI、OA 狀態
+- DOI 旁提供複製按鈕
 - 透過 OpenAlex、Unpaywall、Crossref 查找合法開放 PDF
 - PDF 存到 `01_全文PDF`
 - 檔名格式：`西元年份四碼_英文篇名或中文篇名.pdf`
@@ -30,18 +31,19 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-啟動後瀏覽器會開啟類似以下網址：
+啟動後開啟：
 
 ```text
 http://localhost:8501
 ```
 
-在搜尋框輸入研究構面或關鍵字，例如：
+可輸入：
 
 ```text
 transformational leadership creativity
 knowledge sharing
 technology acceptance model
+brand trust
 ```
 
 ## DOI 批次下載
@@ -82,7 +84,7 @@ streamlit_app.py
 
 6. 按 Deploy
 
-部署完成後，Streamlit 會產生一個公開網址，可直接用瀏覽器輸入關鍵字搜尋。
+部署完成後，Streamlit 會產生公開網址。
 
 ## 合法來源限制
 
