@@ -272,7 +272,7 @@ def download_papers() -> None:
     for doi in dois:
         print(f"\n處理中: {doi}")
         metadata = get_crossref_metadata(doi)
-        file_name = f"{metadata['year']}_{metadata['title']}.pdf"
+        file_name = f"{metadata['year']} {metadata['title']}.pdf"
         file_path = SAVE_DIR / file_name
 
         if file_path.exists():
