@@ -140,22 +140,30 @@ def fetch_original_keywords(doi: str, landing_page_url: str) -> tuple[list[str],
 
 def parse_keywords_from_html(markup: str) -> list[str]:
     soup = BeautifulSoup(markup, "html.parser")
-    keywords = []
+    metadata_keywords = []
 
     for meta in soup.find_all("meta"):
         key = (meta.get("name") or meta.get("property") or "").strip().lower()
         if key in KEYWORD_META_NAMES and meta.get("content"):
-            keywords.extend(split_keyword_text(meta["content"]))
+            metadata_keywords.extend(split_keyword_text(meta["content"]))
 
+    metadata_keywords = dedupe_names(metadata_keywords)
+    if metadata_keywords:
+        return metadata_keywords
+
+    jsonld_keywords = []
     for script in soup.find_all("script", type=lambda value: value and "ld+json" in value):
         try:
             data = json.loads(script.string or "")
         except json.JSONDecodeError:
             continue
-        keywords.extend(extract_jsonld_keywords(data))
+        jsonld_keywords.extend(extract_jsonld_keywords(data))
 
-    keywords.extend(extract_visible_keyword_block(soup))
-    return dedupe_names(keywords)
+    jsonld_keywords = dedupe_names(jsonld_keywords)
+    if jsonld_keywords:
+        return jsonld_keywords
+
+    return extract_visible_keyword_block(soup)
 
 
 def extract_jsonld_keywords(data) -> list[str]:
