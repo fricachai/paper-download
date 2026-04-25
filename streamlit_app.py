@@ -43,6 +43,42 @@ def normalize_relevance(work: dict) -> float:
     return 0.0
 
 
+def extract_work_keywords(work: dict) -> list[str]:
+    keywords = display_names(work.get("keywords") or [])
+    if keywords:
+        return keywords
+
+    concepts = display_names(work.get("concepts") or [])
+    if concepts:
+        return concepts
+
+    topics = display_names(work.get("topics") or [])
+    primary_topic = work.get("primary_topic") or {}
+    if primary_topic.get("display_name"):
+        topics.insert(0, primary_topic["display_name"])
+    return dedupe_names(topics)
+
+
+def display_names(items: list[dict]) -> list[str]:
+    names = []
+    for item in items:
+        name = item.get("display_name")
+        if name:
+            names.append(name)
+    return dedupe_names(names)
+
+
+def dedupe_names(names: list[str]) -> list[str]:
+    seen = set()
+    deduped = []
+    for name in names:
+        key = name.casefold()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(name)
+    return deduped
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5) -> list[dict]:
     url = "https://api.openalex.org/works"
@@ -76,6 +112,7 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
                 "journal": source,
                 "cited_by_count": work.get("cited_by_count") or 0,
                 "relevance_score": normalize_relevance(work),
+                "keywords": extract_work_keywords(work),
                 "authors": format_authors(work.get("authorships") or []),
                 "pdf_url": best_oa.get("pdf_url") or "",
                 "landing_page_url": best_oa.get("landing_page_url") or doi_url,
@@ -181,6 +218,11 @@ def render_article(article: dict, index: int) -> None:
         st.caption(article["authors"] or "作者資料未提供")
         if article["journal"]:
             st.write(f"期刊：{article['journal']}")
+
+        if article["keywords"]:
+            st.markdown("**完整關鍵字：** " + "、".join(article["keywords"]))
+        else:
+            st.caption("完整關鍵字：OpenAlex 未提供。")
 
         if article["doi"]:
             doi_cols = st.columns([4, 1])

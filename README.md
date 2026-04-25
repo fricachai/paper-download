@@ -8,6 +8,7 @@
 - 搜尋結果先依相關性由高到低排序，再依年份由新到舊排序
 - 預設搜尋近 5 年文章，可改為近 3 年、近 10 年或不限年份
 - 顯示年份、篇名、作者、期刊、相關性、引用數、DOI、OA 狀態
+- 每篇文章列出 OpenAlex 提供的完整關鍵字；若無 keywords，則以 concepts/topics 補上
 - DOI 旁提供複製按鈕
 - 透過 OpenAlex、Unpaywall、Crossref 查找合法開放 PDF
 - PDF 存到 `01_全文PDF`
