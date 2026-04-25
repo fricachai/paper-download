@@ -99,9 +99,9 @@ def copy_doi_button(doi: str, key: str) -> None:
     )
 
 
-def external_button(label: str, url: str, disabled: bool = False) -> None:
+def external_button(label: str, url: str, key: str, disabled: bool = False) -> None:
     if disabled or not url:
-        st.button(label, disabled=True)
+        st.button(label, disabled=True, key=key)
         return
 
     safe_url = html.escape(url, quote=True)
@@ -126,9 +126,9 @@ def render_article_actions(article: dict, index: int) -> None:
     with cols[0]:
         copy_doi_button(article["doi"], f"{index}")
     with cols[1]:
-        external_button("PDF電子檔", article["pdf_url"], disabled=not article["pdf_url"])
+        external_button("PDF電子檔", article["pdf_url"], key=f"pdf-{index}", disabled=not article["pdf_url"])
     with cols[2]:
-        external_button("開啟來源", article["landing_page_url"], disabled=not article["landing_page_url"])
+        external_button("開啟來源", article["landing_page_url"], key=f"source-{index}", disabled=not article["landing_page_url"])
 
 
 def render_article(article: dict, index: int) -> None:
