@@ -1,22 +1,12 @@
 import base64
 import html
-import json
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from bs4 import BeautifulSoup
-
-try:
-    from curl_cffi import requests as browser_requests
-except ImportError:
-    browser_requests = None
 
 from paper_download import (
-    HEADERS,
     SAVE_DIR,
     candidate_pdf_urls,
     clean_filename,
@@ -33,16 +23,6 @@ st.set_page_config(
     page_icon="📄",
     layout="wide",
 )
-
-KEYWORD_META_NAMES = {
-    "citation_keywords",
-    "keywords",
-    "keyword",
-    "dc.subject",
-    "dcterms.subject",
-    "prism.keyword",
-    "article:tag",
-}
 
 
 def format_authors(authorships: list[dict]) -> str:
@@ -61,146 +41,6 @@ def normalize_relevance(work: dict) -> float:
     if isinstance(score, int | float):
         return float(score)
     return 0.0
-
-
-def dedupe_names(names: list[str]) -> list[str]:
-    seen = set()
-    deduped = []
-    for name in names:
-        cleaned = re.sub(r"\s+", " ", name).strip(" \t\r\n,;。；、")
-        if not cleaned:
-            continue
-        key = cleaned.casefold()
-        if key not in seen:
-            seen.add(key)
-            deduped.append(cleaned)
-    return deduped
-
-
-def split_keyword_text(text: str) -> list[str]:
-    if not text:
-        return []
-    parts = re.split(r"\s*[;；|、]\s*|\s*,\s*", text)
-    return dedupe_names(parts)
-
-
-def keyword_source_urls(doi: str, landing_page_url: str) -> list[str]:
-    urls = []
-    if landing_page_url:
-        urls.append(landing_page_url)
-    if doi:
-        urls.append(f"https://doi.org/{doi}")
-    return dedupe_names(urls)
-
-
-def fetch_article_markup(url: str) -> tuple[str, str]:
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
-        if is_markup_response(response):
-            return response.text, response.url
-    except requests.RequestException:
-        pass
-
-    if browser_requests is None:
-        return "", ""
-
-    try:
-        response = browser_requests.get(url, impersonate="chrome", timeout=20, allow_redirects=True)
-        if response.status_code < 400:
-            return response.text, response.url
-    except Exception:
-        return "", ""
-
-    return "", ""
-
-
-def is_markup_response(response: requests.Response) -> bool:
-    if response.status_code >= 400:
-        return False
-    content_type = response.headers.get("Content-Type", "").lower()
-    return bool(response.text) and ("html" in content_type or "xml" in content_type)
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_original_keywords(doi: str, landing_page_url: str) -> tuple[list[str], str]:
-    """Return publisher-provided article keywords only.
-
-    OpenAlex concepts, topics, and inferred keywords are intentionally not used
-    here because they are not the same as the article's original Keywords.
-    """
-    for url in keyword_source_urls(doi, landing_page_url):
-        markup, final_url = fetch_article_markup(url)
-        if not markup:
-            continue
-        keywords = parse_keywords_from_html(markup)
-        if keywords:
-            return keywords, final_url
-    return [], ""
-
-
-def parse_keywords_from_html(markup: str) -> list[str]:
-    soup = BeautifulSoup(markup, "html.parser")
-    metadata_keywords = []
-
-    for meta in soup.find_all("meta"):
-        key = (meta.get("name") or meta.get("property") or "").strip().lower()
-        if key in KEYWORD_META_NAMES and meta.get("content"):
-            metadata_keywords.extend(split_keyword_text(meta["content"]))
-
-    metadata_keywords = dedupe_names(metadata_keywords)
-    if metadata_keywords:
-        return metadata_keywords
-
-    jsonld_keywords = []
-    for script in soup.find_all("script", type=lambda value: value and "ld+json" in value):
-        try:
-            data = json.loads(script.string or "")
-        except json.JSONDecodeError:
-            continue
-        jsonld_keywords.extend(extract_jsonld_keywords(data))
-
-    jsonld_keywords = dedupe_names(jsonld_keywords)
-    if jsonld_keywords:
-        return jsonld_keywords
-
-    return extract_visible_keyword_block(soup)
-
-
-def extract_jsonld_keywords(data) -> list[str]:
-    if isinstance(data, list):
-        keywords = []
-        for item in data:
-            keywords.extend(extract_jsonld_keywords(item))
-        return keywords
-
-    if not isinstance(data, dict):
-        return []
-
-    keywords = []
-    value = data.get("keywords")
-    if isinstance(value, list):
-        keywords.extend(str(item) for item in value)
-    elif isinstance(value, str):
-        keywords.extend(split_keyword_text(value))
-
-    graph = data.get("@graph")
-    if graph:
-        keywords.extend(extract_jsonld_keywords(graph))
-    return dedupe_names(keywords)
-
-
-def extract_visible_keyword_block(soup: BeautifulSoup) -> list[str]:
-    labels = soup.find_all(string=re.compile(r"^\s*Keywords?\s*:?\s*$", re.I))
-    for label in labels:
-        parent = label.parent
-        if not parent:
-            continue
-        container = parent.parent or parent
-        text = container.get_text(" ", strip=True)
-        match = re.search(r"Keywords?\s*:?\s*(.+)", text, flags=re.I)
-        if match:
-            return split_keyword_text(match.group(1))
-    return []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -240,32 +80,11 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
                 "pdf_url": best_oa.get("pdf_url") or "",
                 "landing_page_url": best_oa.get("landing_page_url") or doi_url,
                 "is_oa": bool(work.get("open_access", {}).get("is_oa")),
-                "original_keywords": [],
-                "keyword_source_url": "",
             }
         )
 
     articles.sort(key=lambda item: (-item["relevance_score"], -int(item["year"] or 0)))
-    articles = articles[:limit]
-    attach_original_keywords(articles)
-    return articles
-
-
-def attach_original_keywords(articles: list[dict]) -> None:
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {
-            executor.submit(fetch_original_keywords, article["doi"], article["landing_page_url"]): article
-            for article in articles
-            if article["doi"] or article["landing_page_url"]
-        }
-        for future in as_completed(futures):
-            article = futures[future]
-            try:
-                keywords, source_url = future.result()
-            except Exception:
-                keywords, source_url = [], ""
-            article["original_keywords"] = keywords
-            article["keyword_source_url"] = source_url
+    return articles[:limit]
 
 
 def build_filename(metadata: dict) -> str:
@@ -363,13 +182,6 @@ def render_article(article: dict, index: int) -> None:
         if article["journal"]:
             st.write(f"期刊：{article['journal']}")
 
-        if article["original_keywords"]:
-            st.markdown("**原文 Keywords：** " + "、".join(article["original_keywords"]))
-            if article["keyword_source_url"]:
-                st.caption(f"Keywords 來源：{article['keyword_source_url']}")
-        else:
-            st.caption("原文 Keywords：未取得。出版社頁面可能未提供 metadata，或阻擋程式讀取。")
-
         if article["doi"]:
             doi_cols = st.columns([4, 1])
             with doi_cols[0]:
@@ -405,13 +217,13 @@ recent_year_map = {
     "不限年份": None,
 }
 
-st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。原文 Keywords 只從出版社/文章頁 metadata 讀取，不用 OpenAlex 推論分類替代。")
+st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。PDF 只會從合法免費來源下載。")
 
 if submitted and not keyword.strip():
     st.warning("請先輸入關鍵字或研究構面。")
 
 if submitted and keyword.strip():
-    with st.spinner("正在搜尋文章與原文 Keywords..."):
+    with st.spinner("正在搜尋文章..."):
         try:
             results = search_articles(keyword.strip(), limit, recent_year_map[recent_choice])
         except requests.RequestException as exc:
