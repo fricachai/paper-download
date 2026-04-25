@@ -85,7 +85,7 @@ def action_link(label: str, url: str, class_name: str, extra_class: str = "") ->
 
 def pdf_link_for_article(article: dict, class_name: str) -> str:
     if article["pdf_url"]:
-        return action_link("PDF電子檔", article["pdf_url"], class_name)
+        return action_link("PDF電子檔", article["pdf_url"], class_name, "available-pdf")
     if article["doi"]:
         return action_link("PDF電子檔", f"http://localhost:8000/{article['doi']}", class_name, "missing-pdf")
     return f'<span class="{class_name} missing-pdf disabled">PDF電子檔</span>'
@@ -145,6 +145,11 @@ def render_article_actions(article: dict, index: int) -> None:
             background: #fff1f2;
             border-color: #f4b4bd;
             color: #9f1239;
+          }}
+          .{button_class}.available-pdf {{
+            background: #ecfdf3;
+            border-color: #9fd8b8;
+            color: #166534;
           }}
           .{button_class}.disabled {{
             color: #a0a4ad;
