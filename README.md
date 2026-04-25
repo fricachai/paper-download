@@ -46,6 +46,28 @@ technology acceptance model
 brand trust
 ```
 
+## 登入
+
+預設帳號：
+
+```text
+frica
+jimmy
+```
+
+預設密碼：
+
+```text
+stock2026
+```
+
+部署到 Streamlit Cloud 時，可用 Secrets 覆蓋：
+
+```toml
+AUTH_USERNAMES = ["frica", "jimmy"]
+AUTH_PASSWORD = "stock2026"
+```
+
 ## DOI 批次下載
 
 將 DOI 放入 `config/dois.txt`，一行一筆：

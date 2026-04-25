@@ -14,6 +14,110 @@ st.set_page_config(
     layout="wide",
 )
 
+DEFAULT_AUTH_USERNAMES = ["frica", "jimmy"]
+DEFAULT_AUTH_PASSWORD = "stock2026"
+
+
+def get_auth_config() -> tuple[list[str], str]:
+    try:
+        usernames = list(st.secrets.get("AUTH_USERNAMES", DEFAULT_AUTH_USERNAMES))
+        password = str(st.secrets.get("AUTH_PASSWORD", DEFAULT_AUTH_PASSWORD))
+    except Exception:
+        usernames = DEFAULT_AUTH_USERNAMES
+        password = DEFAULT_AUTH_PASSWORD
+    return usernames, password
+
+
+def login_styles() -> None:
+    st.markdown(
+        """
+        <style>
+          .stApp {
+            background:
+              radial-gradient(circle at top left, rgba(54, 104, 190, 0.14), transparent 26%),
+              radial-gradient(circle at bottom right, rgba(255, 152, 17, 0.08), transparent 24%),
+              #f7f8fb;
+          }
+          .login-shell {
+            display: grid;
+            min-height: 72vh;
+            place-items: center;
+          }
+          .login-frame {
+            border-radius: 22px;
+            padding: 2px;
+            width: min(100%, 420px);
+            background: linear-gradient(115deg, #ff63c8, #ffbe72, #7ce1ff, #b47cff, #ff63c8);
+            box-shadow:
+              0 24px 60px rgba(0, 0, 0, 0.18),
+              0 0 18px rgba(124, 225, 255, 0.18);
+          }
+          .login-panel {
+            border-radius: 20px;
+            padding: 28px;
+            background: linear-gradient(180deg, rgba(17, 20, 27, 0.98), rgba(11, 13, 18, 0.99));
+            color: #f5f6fa;
+          }
+          .login-panel h1 {
+            margin: 0 0 8px;
+            text-align: center;
+            font-size: 28px;
+          }
+          .login-panel p {
+            margin: 0;
+            color: #a9b2c2;
+            text-align: center;
+          }
+          div[data-testid="stForm"] {
+            border: 0;
+            box-shadow: none;
+            background: transparent;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_login_gate() -> bool:
+    if st.session_state.get("authenticated"):
+        return True
+
+    login_styles()
+    st.markdown(
+        """
+        <div class="login-shell">
+          <div class="login-frame">
+            <div class="login-panel">
+              <h1>登入期刊文章系統</h1>
+              <p>請輸入授權帳號與密碼後繼續。</p>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    usernames, password = get_auth_config()
+    with st.form("login-form"):
+        username = st.text_input("帳號", autocomplete="username")
+        entered_password = st.text_input("密碼", type="password", autocomplete="current-password")
+        submitted = st.form_submit_button("登入")
+
+    if submitted:
+        if username.strip() in usernames and entered_password == password:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        st.error("帳號或密碼錯誤。")
+
+    st.stop()
+
+
+def render_logout_button() -> None:
+    if st.sidebar.button("登出"):
+        st.session_state.pop("authenticated", None)
+        st.rerun()
+
 
 def format_authors(authorships: list[dict]) -> str:
     names = []
@@ -207,6 +311,9 @@ def render_article(article: dict, index: int) -> None:
 
         render_article_actions(article, index)
 
+
+render_login_gate()
+render_logout_button()
 
 st.title("期刊文章電子檔查找系統")
 st.write("輸入研究構面或關鍵字，優先列出相關性高且年份新的文章。")
