@@ -24,11 +24,30 @@ API_SOURCES = [
     "OpenAlex",
     "Semantic Scholar",
     "Crossref",
+    "Google Scholar (SerpAPI)",
+    "Scopus (Elsevier API)",
+    "ScienceDirect (Elsevier API)",
+    "Web of Science (API)",
+    "Springer Nature",
     "PubMed",
+    "Europe PMC",
     "ERIC",
     "DOAJ",
     "arXiv",
     "CORE",
+    "DataCite",
+]
+
+DEFAULT_PUBLIC_SOURCES = [
+    "OpenAlex",
+    "Semantic Scholar",
+    "Crossref",
+    "PubMed",
+    "Europe PMC",
+    "ERIC",
+    "DOAJ",
+    "arXiv",
+    "DataCite",
 ]
 
 
@@ -510,6 +529,260 @@ def get_core_api_key() -> str:
         return os.getenv("CORE_API_KEY", "")
 
 
+def get_secret_or_env(name: str) -> str:
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:
+        value = ""
+    return str(value or os.getenv(name, ""))
+
+
+def require_key(name: str, source: str) -> str:
+    value = get_secret_or_env(name)
+    if not value:
+        raise RuntimeError(f"{source} 需要設定 {name}")
+    return value
+
+
+def search_google_scholar_serpapi(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = require_key("SERPAPI_KEY", "Google Scholar (SerpAPI)")
+    params = {
+        "engine": "google_scholar",
+        "q": keyword,
+        "api_key": api_key,
+        "num": min(limit, 20),
+    }
+    data = request_json("https://serpapi.com/search.json", params, timeout=25)
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for item in data.get("organic_results", []):
+        publication = item.get("publication_info") or {}
+        summary = publication.get("summary", "")
+        year_match = re.search(r"\b(19|20)\d{2}\b", summary)
+        year = int(year_match.group(0)) if year_match else 0
+        if from_year and year and year < from_year:
+            continue
+        resources = item.get("resources") or []
+        pdf_url = next((resource.get("link", "") for resource in resources if "pdf" in (resource.get("file_format", "") + resource.get("link", "")).lower()), "")
+        cited_by = ((item.get("inline_links") or {}).get("cited_by") or {}).get("total", 0)
+        articles.append(
+            normalize_article(
+                source="Google Scholar",
+                title=item.get("title"),
+                year=year,
+                cited_by_count=cited_by,
+                relevance_score=95,
+                authors=summary,
+                pdf_url=pdf_url,
+                landing_page_url=item.get("link", ""),
+                is_oa=bool(pdf_url),
+            )
+        )
+    return articles
+
+
+def search_scopus(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = require_key("ELSEVIER_API_KEY", "Scopus (Elsevier API)")
+    query = f'TITLE-ABS-KEY("{keyword}")'
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        query += f" AND PUBYEAR > {from_year - 1}"
+    data = request_json(
+        "https://api.elsevier.com/content/search/scopus",
+        {"query": query, "count": min(limit, 25), "sort": "relevancy"},
+        headers={"X-ELS-APIKey": api_key, "Accept": "application/json"},
+        timeout=25,
+    )
+    articles = []
+    for item in data.get("search-results", {}).get("entry", []):
+        doi = item.get("prism:doi", "")
+        year = (item.get("prism:coverDate", "") or "")[:4]
+        links = item.get("link") or []
+        landing = next((link.get("@href", "") for link in links if link.get("@ref") == "scopus"), "")
+        articles.append(
+            normalize_article(
+                source="Scopus",
+                title=item.get("dc:title"),
+                year=year,
+                doi=doi,
+                journal=item.get("prism:publicationName", ""),
+                cited_by_count=item.get("citedby-count") or 0,
+                relevance_score=90,
+                authors=item.get("dc:creator", ""),
+                landing_page_url=landing or (f"https://doi.org/{doi}" if doi else ""),
+            )
+        )
+    return articles
+
+
+def search_sciencedirect(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = require_key("ELSEVIER_API_KEY", "ScienceDirect (Elsevier API)")
+    query = keyword
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        query += f" AND pub-date > {from_year - 1}"
+    data = request_json(
+        "https://api.elsevier.com/content/search/sciencedirect",
+        {"query": query, "count": min(limit, 25), "sort": "relevance"},
+        headers={"X-ELS-APIKey": api_key, "Accept": "application/json"},
+        timeout=25,
+    )
+    articles = []
+    for item in data.get("search-results", {}).get("entry", []):
+        doi = item.get("prism:doi", "")
+        year = (item.get("prism:coverDate", "") or "")[:4]
+        links = item.get("link") or []
+        landing = next((link.get("@href", "") for link in links if link.get("@href")), "")
+        articles.append(
+            normalize_article(
+                source="ScienceDirect",
+                title=item.get("dc:title"),
+                year=year,
+                doi=doi,
+                journal=item.get("prism:publicationName", ""),
+                relevance_score=88,
+                authors=item.get("dc:creator", ""),
+                landing_page_url=landing or (f"https://doi.org/{doi}" if doi else ""),
+            )
+        )
+    return articles
+
+
+def search_web_of_science(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = require_key("WOS_API_KEY", "Web of Science (API)")
+    query = f'TS="{keyword}"'
+    data = request_json(
+        "https://api.clarivate.com/apis/wos-starter/v1/documents",
+        {"q": query, "limit": min(limit, 50), "page": 1},
+        headers={"X-ApiKey": api_key, "Accept": "application/json"},
+        timeout=25,
+    )
+    from_year = from_year_filter(recent_years)
+    records = data.get("hits") or data.get("documents") or []
+    articles = []
+    for item in records:
+        year = item.get("source", {}).get("publishYear") or item.get("year") or 0
+        if from_year and year and int(year) < from_year:
+            continue
+        identifiers = item.get("identifiers") or {}
+        doi = identifiers.get("doi", "") if isinstance(identifiers, dict) else ""
+        title = item.get("title") or (item.get("names", {}) or {}).get("title", "")
+        source = item.get("source") or {}
+        articles.append(
+            normalize_article(
+                source="Web of Science",
+                title=title,
+                year=year,
+                doi=doi,
+                journal=source.get("sourceTitle", "") if isinstance(source, dict) else "",
+                cited_by_count=item.get("citations", [{}])[0].get("count", 0) if isinstance(item.get("citations"), list) and item.get("citations") else 0,
+                relevance_score=92,
+                landing_page_url=f"https://doi.org/{doi}" if doi else "",
+            )
+        )
+    return articles
+
+
+def search_springer(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = require_key("SPRINGER_API_KEY", "Springer Nature")
+    query = f"keyword:{keyword}"
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        query += f" year:{from_year}-3000"
+    data = request_json(
+        "https://api.springernature.com/meta/v2/json",
+        {"q": query, "p": min(limit, 100), "api_key": api_key},
+        timeout=25,
+    )
+    articles = []
+    for item in data.get("records", []):
+        doi = item.get("doi", "")
+        pdf_url = ""
+        landing = ""
+        for url_info in item.get("url", []) or []:
+            if url_info.get("format") == "pdf":
+                pdf_url = url_info.get("value", "")
+            if not landing and url_info.get("value"):
+                landing = url_info.get("value", "")
+        articles.append(
+            normalize_article(
+                source="Springer Nature",
+                title=item.get("title"),
+                year=item.get("publicationDate", "")[:4],
+                doi=doi,
+                journal=item.get("publicationName", ""),
+                relevance_score=84,
+                authors="; ".join(item.get("creators", [])[:5]) if isinstance(item.get("creators"), list) else "",
+                pdf_url=pdf_url,
+                landing_page_url=landing or (f"https://doi.org/{doi}" if doi else ""),
+                is_oa=bool(pdf_url),
+            )
+        )
+    return articles
+
+
+def search_europe_pmc(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    query = keyword
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        query += f" AND FIRST_PDATE:[{from_year}-01-01 TO 3000-12-31]"
+    data = request_json(
+        "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+        {"query": query, "format": "json", "pageSize": min(limit, 100)},
+        timeout=25,
+    )
+    articles = []
+    for item in data.get("resultList", {}).get("result", []):
+        doi = item.get("doi", "")
+        pmcid = item.get("pmcid", "")
+        pdf_url = f"https://europepmc.org/articles/{pmcid}?pdf=render" if pmcid else ""
+        articles.append(
+            normalize_article(
+                source="Europe PMC",
+                title=item.get("title"),
+                year=item.get("pubYear"),
+                doi=doi,
+                journal=item.get("journalTitle", ""),
+                cited_by_count=item.get("citedByCount") or 0,
+                relevance_score=78,
+                authors=item.get("authorString", ""),
+                pdf_url=pdf_url,
+                landing_page_url=f"https://europepmc.org/article/{item.get('source', 'MED')}/{item.get('id', '')}",
+                is_oa=bool(pdf_url),
+            )
+        )
+    return articles
+
+
+def search_datacite(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    data = request_json("https://api.datacite.org/dois", {"query": keyword, "page[size]": min(limit, 100)}, timeout=25)
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for item in data.get("data", []):
+        attrs = item.get("attributes", {})
+        year = attrs.get("publicationYear") or 0
+        if from_year and year and int(year) < from_year:
+            continue
+        creators = attrs.get("creators") or []
+        authors = "; ".join((creator.get("name") or "").strip() for creator in creators[:5] if creator.get("name"))
+        titles = attrs.get("titles") or []
+        title = titles[0].get("title", "") if titles else ""
+        doi = attrs.get("doi", "")
+        articles.append(
+            normalize_article(
+                source="DataCite",
+                title=title,
+                year=year,
+                doi=doi,
+                journal=attrs.get("publisher", ""),
+                relevance_score=50,
+                authors=authors,
+                landing_page_url=attrs.get("url", "") or (f"https://doi.org/{doi}" if doi else ""),
+            )
+        )
+    return articles
+
+
 def search_core(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
     api_key = get_core_api_key()
     if not api_key:
@@ -545,11 +818,18 @@ SOURCE_FUNCTIONS = {
     "OpenAlex": search_openalex,
     "Semantic Scholar": search_semantic_scholar,
     "Crossref": search_crossref,
+    "Google Scholar (SerpAPI)": search_google_scholar_serpapi,
+    "Scopus (Elsevier API)": search_scopus,
+    "ScienceDirect (Elsevier API)": search_sciencedirect,
+    "Web of Science (API)": search_web_of_science,
+    "Springer Nature": search_springer,
     "PubMed": search_pubmed,
+    "Europe PMC": search_europe_pmc,
     "ERIC": search_eric,
     "DOAJ": search_doaj,
     "arXiv": search_arxiv,
     "CORE": search_core,
+    "DataCite": search_datacite,
 }
 
 
@@ -750,7 +1030,7 @@ with st.form("search-form"):
     )
     recent_choice = cols[1].selectbox("年份範圍", ["近 5 年", "近 3 年", "近 10 年", "不限年份"], index=0)
     limit = cols[2].selectbox("筆數", [10, 25, 50], index=1)
-    selected_sources = st.multiselect("API 搜尋來源", API_SOURCES, default=["OpenAlex", "Semantic Scholar", "Crossref", "DOAJ"])
+    selected_sources = st.multiselect("API 搜尋來源", API_SOURCES, default=DEFAULT_PUBLIC_SOURCES)
     submitted = st.form_submit_button("搜尋")
 
 recent_year_map = {

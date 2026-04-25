@@ -9,7 +9,7 @@
 - 預設搜尋近 5 年文章，可改為近 3 年、近 10 年或不限年份
 - 顯示年份、篇名、作者、期刊、相關性、引用數、DOI、OA 狀態
 - DOI 旁提供複製按鈕
-- API 搜尋來源包含 OpenAlex、Semantic Scholar、Crossref、PubMed、ERIC、DOAJ、arXiv、CORE
+- API 搜尋來源包含 OpenAlex、Semantic Scholar、Crossref、Google Scholar（SerpAPI）、Scopus、ScienceDirect、Web of Science、Springer Nature、PubMed、Europe PMC、ERIC、DOAJ、arXiv、CORE、DataCite
 - Google Scholar、Web of Science、Scopus、ResearchGate、SSRN、OSF、BASE、出版社資料庫與機構典藏提供外部搜尋入口
 - 透過各來源回傳資料查找合法開放 PDF
 - PDF 存到 `01_全文PDF`
@@ -92,6 +92,20 @@ python paper_download.py
 $env:UNPAYWALL_EMAIL="your-email@example.com"
 streamlit run streamlit_app.py
 ```
+
+## 可選 API Keys
+
+部分資料庫需要官方或合法第三方 API key 才能自動搜尋。可在 Streamlit Cloud Secrets 設定：
+
+```toml
+SERPAPI_KEY = "Google Scholar via SerpAPI key"
+ELSEVIER_API_KEY = "Scopus / ScienceDirect API key"
+WOS_API_KEY = "Web of Science API key"
+SPRINGER_API_KEY = "Springer Nature API key"
+CORE_API_KEY = "CORE API key"
+```
+
+未設定 key 的來源會在搜尋時顯示「需要設定 API key」，不會假裝已搜尋。
 
 ## 部署到 Streamlit Cloud
 
