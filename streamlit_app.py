@@ -76,45 +76,12 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
     return articles[:limit]
 
 
-def copy_doi_button(doi: str, key: str) -> None:
-    safe_doi = html.escape(doi, quote=True)
-    encoded = base64.b64encode(doi.encode("utf-8")).decode("ascii")
-    components.html(
-        f"""
-        <div style="display:inline-flex;align-items:center;gap:8px;max-width:100%;">
-          <code style="background:#f6f8fa;border-radius:6px;padding:11px 12px;display:inline-block;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;">{safe_doi}</code>
-          <button id="copy-{key}" style="border:1px solid #d0d7de;border-radius:6px;background:white;padding:9px 12px;cursor:pointer;white-space:nowrap;">複製</button>
-        </div>
-        <script>
-          const button = document.getElementById("copy-{key}");
-          button.addEventListener("click", async () => {{
-            const text = decodeURIComponent(escape(atob("{encoded}")));
-            await navigator.clipboard.writeText(text);
-            button.textContent = "已複製";
-            setTimeout(() => button.textContent = "複製", 1400);
-          }});
-        </script>
-        """,
-        height=52,
-    )
-
-
-def external_button(label: str, url: str, key: str, disabled: bool = False) -> None:
-    if disabled or not url:
-        st.button(label, disabled=True, key=key)
-        return
-
-    safe_url = html.escape(url, quote=True)
+def action_link(label: str, url: str, class_name: str) -> str:
     safe_label = html.escape(label)
-    st.markdown(
-        f"""
-        <a href="{safe_url}" target="_blank" rel="noreferrer"
-           style="display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 16px;border:1px solid #d0d7de;border-radius:6px;text-decoration:none;color:#31333f;background:#ffffff;white-space:nowrap;">
-          {safe_label}
-        </a>
-        """,
-        unsafe_allow_html=True,
-    )
+    if not url:
+        return f'<span class="{class_name} disabled">{safe_label}</span>'
+    safe_url = html.escape(url, quote=True)
+    return f'<a class="{class_name}" href="{safe_url}" target="_blank" rel="noreferrer">{safe_label}</a>'
 
 
 def render_article_actions(article: dict, index: int) -> None:
@@ -122,13 +89,75 @@ def render_article_actions(article: dict, index: int) -> None:
         st.caption("此筆資料沒有 DOI。")
         return
 
-    cols = st.columns([2.4, 0.9, 0.9, 5.8])
-    with cols[0]:
-        copy_doi_button(article["doi"], f"{index}")
-    with cols[1]:
-        external_button("PDF電子檔", article["pdf_url"], key=f"pdf-{index}", disabled=not article["pdf_url"])
-    with cols[2]:
-        external_button("開啟來源", article["landing_page_url"], key=f"source-{index}", disabled=not article["landing_page_url"])
+    key = f"article-{index}"
+    button_class = f"action-button-{index}"
+    safe_doi = html.escape(article["doi"], quote=True)
+    encoded_doi = base64.b64encode(article["doi"].encode("utf-8")).decode("ascii")
+    pdf_button = action_link("PDF電子檔", article["pdf_url"], button_class)
+    source_button = action_link("開啟來源", article["landing_page_url"], button_class)
+
+    components.html(
+        f"""
+        <style>
+          .action-row-{index} {{
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            width: 100%;
+          }}
+          .doi-box-{index} {{
+            background: #f6f8fa;
+            border-radius: 6px;
+            display: inline-flex;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+            font-size: 14px;
+            line-height: 1;
+            padding: 13px 14px;
+            white-space: nowrap;
+          }}
+          .{button_class} {{
+            align-items: center;
+            background: #fff;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            box-sizing: border-box;
+            color: #31333f;
+            cursor: pointer;
+            display: inline-flex;
+            font-family: sans-serif;
+            font-size: 14px;
+            height: 42px;
+            justify-content: center;
+            line-height: 1;
+            padding: 0 16px;
+            text-decoration: none;
+            white-space: nowrap;
+          }}
+          .{button_class}.disabled {{
+            color: #a0a4ad;
+            cursor: default;
+            pointer-events: none;
+          }}
+        </style>
+        <div class="action-row-{index}">
+          <code class="doi-box-{index}">{safe_doi}</code>
+          <button class="{button_class}" id="copy-{key}">複製</button>
+          {pdf_button}
+          {source_button}
+        </div>
+        <script>
+          const button = document.getElementById("copy-{key}");
+          button.addEventListener("click", async () => {{
+            const text = decodeURIComponent(escape(atob("{encoded_doi}")));
+            await navigator.clipboard.writeText(text);
+            button.textContent = "已複製";
+            setTimeout(() => button.textContent = "複製", 1400);
+          }});
+        </script>
+        """,
+        height=58,
+    )
 
 
 def render_article(article: dict, index: int) -> None:
