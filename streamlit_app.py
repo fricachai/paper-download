@@ -1,5 +1,6 @@
 import base64
 import html
+import re
 from datetime import datetime
 
 import requests
@@ -30,6 +31,18 @@ def normalize_relevance(work: dict) -> float:
     if isinstance(score, int | float):
         return float(score)
     return 0.0
+
+
+def clean_filename(name: str) -> str:
+    cleaned = re.sub(r'[\\/*?:"<>|]', "", name)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:180] or "Unknown_Title"
+
+
+def pdf_filename(article: dict) -> str:
+    year = article["year"] or "Unknown_Year"
+    title = clean_filename(article["title"])
+    return f"{year} {title}.pdf"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -76,18 +89,20 @@ def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5)
     return articles[:limit]
 
 
-def action_link(label: str, url: str, class_name: str, extra_class: str = "") -> str:
+def action_link(label: str, url: str, class_name: str, extra_class: str = "", download_name: str = "") -> str:
     safe_label = html.escape(label)
     safe_url = html.escape(url, quote=True)
     classes = f"{class_name} {extra_class}".strip()
-    return f'<a class="{classes}" href="{safe_url}" target="_blank" rel="noreferrer">{safe_label}</a>'
+    download_attr = f' download="{html.escape(download_name, quote=True)}"' if download_name else ""
+    return f'<a class="{classes}" href="{safe_url}" target="_blank" rel="noreferrer"{download_attr}>{safe_label}</a>'
 
 
 def pdf_link_for_article(article: dict, class_name: str) -> str:
+    download_name = pdf_filename(article)
     if article["pdf_url"]:
-        return action_link("PDF電子檔", article["pdf_url"], class_name, "available-pdf")
+        return action_link("PDF電子檔", article["pdf_url"], class_name, "available-pdf", download_name)
     if article["doi"]:
-        return action_link("PDF電子檔", f"http://localhost:8000/{article['doi']}", class_name, "missing-pdf")
+        return action_link("PDF電子檔", f"http://localhost:8000/{article['doi']}", class_name, "missing-pdf", download_name)
     return f'<span class="{class_name} missing-pdf disabled">PDF電子檔</span>'
 
 
