@@ -10,6 +10,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
 
+try:
+    from curl_cffi import requests as browser_requests
+except ImportError:
+    browser_requests = None
+
 from paper_download import (
     HEADERS,
     SAVE_DIR,
@@ -88,6 +93,34 @@ def keyword_source_urls(doi: str, landing_page_url: str) -> list[str]:
     return dedupe_names(urls)
 
 
+def fetch_article_markup(url: str) -> tuple[str, str]:
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
+        if is_markup_response(response):
+            return response.text, response.url
+    except requests.RequestException:
+        pass
+
+    if browser_requests is None:
+        return "", ""
+
+    try:
+        response = browser_requests.get(url, impersonate="chrome", timeout=20, allow_redirects=True)
+        if response.status_code < 400:
+            return response.text, response.url
+    except Exception:
+        return "", ""
+
+    return "", ""
+
+
+def is_markup_response(response: requests.Response) -> bool:
+    if response.status_code >= 400:
+        return False
+    content_type = response.headers.get("Content-Type", "").lower()
+    return bool(response.text) and ("html" in content_type or "xml" in content_type)
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_original_keywords(doi: str, landing_page_url: str) -> tuple[list[str], str]:
     """Return publisher-provided article keywords only.
@@ -96,18 +129,12 @@ def fetch_original_keywords(doi: str, landing_page_url: str) -> tuple[list[str],
     here because they are not the same as the article's original Keywords.
     """
     for url in keyword_source_urls(doi, landing_page_url):
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
-            if response.status_code >= 400:
-                continue
-            content_type = response.headers.get("Content-Type", "").lower()
-            if "html" not in content_type and "xml" not in content_type and response.text:
-                continue
-            keywords = parse_keywords_from_html(response.text)
-            if keywords:
-                return keywords, response.url
-        except requests.RequestException:
+        markup, final_url = fetch_article_markup(url)
+        if not markup:
             continue
+        keywords = parse_keywords_from_html(markup)
+        if keywords:
+            return keywords, final_url
     return [], ""
 
 
