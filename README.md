@@ -52,7 +52,6 @@ brand trust
 
 ```text
 frica
-jimmy
 ```
 
 預設密碼：
@@ -64,7 +63,7 @@ stock2026
 部署到 Streamlit Cloud 時，可用 Secrets 覆蓋：
 
 ```toml
-AUTH_USERNAMES = ["frica", "jimmy"]
+AUTH_USERNAMES = ["frica"]
 AUTH_PASSWORD = "stock2026"
 ```
 

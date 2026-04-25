@@ -14,7 +14,7 @@ st.set_page_config(
     layout="wide",
 )
 
-DEFAULT_AUTH_USERNAMES = ["frica", "jimmy"]
+DEFAULT_AUTH_USERNAMES = ["frica"]
 DEFAULT_AUTH_PASSWORD = "stock2026"
 
 
