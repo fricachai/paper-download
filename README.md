@@ -9,7 +9,9 @@
 - 預設搜尋近 5 年文章，可改為近 3 年、近 10 年或不限年份
 - 顯示年份、篇名、作者、期刊、相關性、引用數、DOI、OA 狀態
 - DOI 旁提供複製按鈕
-- 透過 OpenAlex、Unpaywall、Crossref 查找合法開放 PDF
+- API 搜尋來源包含 OpenAlex、Semantic Scholar、Crossref、PubMed、ERIC、DOAJ、arXiv、CORE
+- Google Scholar、Web of Science、Scopus、ResearchGate、SSRN、OSF、BASE、出版社資料庫與機構典藏提供外部搜尋入口
+- 透過各來源回傳資料查找合法開放 PDF
 - PDF 存到 `01_全文PDF`
 - 檔名格式：`西元年份四碼 英文篇名或中文篇名.pdf`
 - 找不到合法免費全文時，寫入 `03_待取得全文/待取得全文.csv`

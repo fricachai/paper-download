@@ -1,7 +1,10 @@
 import base64
 import html
+import os
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import quote, quote_plus
 
 import requests
 import streamlit as st
@@ -16,6 +19,17 @@ st.set_page_config(
 
 DEFAULT_AUTH_USERNAMES = ["frica"]
 DEFAULT_AUTH_PASSWORD = "stock2026"
+
+API_SOURCES = [
+    "OpenAlex",
+    "Semantic Scholar",
+    "Crossref",
+    "PubMed",
+    "ERIC",
+    "DOAJ",
+    "arXiv",
+    "CORE",
+]
 
 
 def get_auth_config() -> tuple[list[str], str]:
@@ -119,7 +133,86 @@ def render_logout_button() -> None:
         st.rerun()
 
 
-def format_authors(authorships: list[dict]) -> str:
+def clean_filename(name: str) -> str:
+    cleaned = re.sub(r'[\\/*?:"<>|]', "", name)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:180] or "Unknown_Title"
+
+
+def normalize_doi(doi: str) -> str:
+    doi = (doi or "").strip()
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", doi, flags=re.I)
+    return doi
+
+
+def normalize_title(title: str) -> str:
+    return re.sub(r"\s+", " ", (title or "")).strip()
+
+
+def article_key(article: dict) -> str:
+    doi = normalize_doi(article.get("doi", "")).lower()
+    if doi:
+        return f"doi:{doi}"
+    return f"title:{normalize_title(article.get('title', '')).casefold()}"
+
+
+def normalize_article(
+    *,
+    source: str,
+    title: str,
+    year: int | str | None = 0,
+    doi: str = "",
+    journal: str = "",
+    cited_by_count: int = 0,
+    relevance_score: float = 0,
+    authors: str = "",
+    pdf_url: str = "",
+    landing_page_url: str = "",
+    is_oa: bool = False,
+) -> dict:
+    year_value = int(year) if str(year or "").isdigit() else 0
+    doi = normalize_doi(doi)
+    return {
+        "title": normalize_title(title) or "Untitled",
+        "year": year_value,
+        "doi": doi,
+        "journal": journal or "",
+        "cited_by_count": int(cited_by_count or 0),
+        "relevance_score": float(relevance_score or 0),
+        "authors": authors or "",
+        "pdf_url": pdf_url or "",
+        "landing_page_url": landing_page_url or (f"https://doi.org/{doi}" if doi else ""),
+        "is_oa": bool(is_oa or pdf_url),
+        "sources": [source],
+    }
+
+
+def merge_articles(article_lists: list[list[dict]], limit: int) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for articles in article_lists:
+        for article in articles:
+            key = article_key(article)
+            if not key or key == "title:":
+                continue
+            if key not in merged:
+                merged[key] = article
+                continue
+
+            existing = merged[key]
+            existing["sources"] = sorted(set(existing["sources"] + article["sources"]))
+            existing["cited_by_count"] = max(existing["cited_by_count"], article["cited_by_count"])
+            existing["relevance_score"] = max(existing["relevance_score"], article["relevance_score"])
+            for field in ("doi", "journal", "authors", "pdf_url", "landing_page_url"):
+                if not existing.get(field) and article.get(field):
+                    existing[field] = article[field]
+            existing["is_oa"] = existing["is_oa"] or article["is_oa"]
+
+    results = list(merged.values())
+    results.sort(key=lambda item: (-item["relevance_score"], -int(item["year"] or 0), -item["cited_by_count"]))
+    return results[:limit]
+
+
+def format_openalex_authors(authorships: list[dict]) -> str:
     names = []
     for authorship in authorships[:5]:
         author = authorship.get("author") or {}
@@ -130,67 +223,355 @@ def format_authors(authorships: list[dict]) -> str:
     return "; ".join(names)
 
 
-def normalize_relevance(work: dict) -> float:
-    score = work.get("relevance_score")
-    if isinstance(score, int | float):
-        return float(score)
-    return 0.0
+def request_json(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 20) -> dict:
+    response = requests.get(url, params=params, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
-def clean_filename(name: str) -> str:
-    cleaned = re.sub(r'[\\/*?:"<>|]', "", name)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:180] or "Unknown_Title"
+def from_year_filter(recent_years: int | None) -> int | None:
+    if not recent_years:
+        return None
+    return datetime.now().year - recent_years + 1
+
+
+def search_openalex(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    filters = ["type:article"]
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        filters.append(f"from_publication_date:{from_year}-01-01")
+    data = request_json(
+        "https://api.openalex.org/works",
+        {
+            "search": keyword,
+            "filter": ",".join(filters),
+            "per-page": min(max(limit * 2, 25), 200),
+        },
+        timeout=25,
+    )
+    articles = []
+    for work in data.get("results", []):
+        doi_url = work.get("doi") or ""
+        best_oa = work.get("best_oa_location") or {}
+        primary = work.get("primary_location") or {}
+        source = (primary.get("source") or {}).get("display_name", "")
+        articles.append(
+            normalize_article(
+                source="OpenAlex",
+                title=work.get("title"),
+                year=work.get("publication_year"),
+                doi=doi_url,
+                journal=source,
+                cited_by_count=work.get("cited_by_count") or 0,
+                relevance_score=work.get("relevance_score") or 0,
+                authors=format_openalex_authors(work.get("authorships") or []),
+                pdf_url=best_oa.get("pdf_url") or "",
+                landing_page_url=best_oa.get("landing_page_url") or doi_url,
+                is_oa=bool(work.get("open_access", {}).get("is_oa")),
+            )
+        )
+    return articles
+
+
+def search_semantic_scholar(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    fields = "title,year,authors,journal,citationCount,externalIds,openAccessPdf,url,isOpenAccess"
+    data = request_json(
+        "https://api.semanticscholar.org/graph/v1/paper/search",
+        {"query": keyword, "limit": min(limit, 100), "fields": fields},
+        timeout=25,
+    )
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for item in data.get("data", []):
+        year = item.get("year") or 0
+        if from_year and year and year < from_year:
+            continue
+        external = item.get("externalIds") or {}
+        journal = (item.get("journal") or {}).get("name", "")
+        pdf = item.get("openAccessPdf") or {}
+        authors = "; ".join(author.get("name", "") for author in (item.get("authors") or [])[:5] if author.get("name"))
+        articles.append(
+            normalize_article(
+                source="Semantic Scholar",
+                title=item.get("title"),
+                year=year,
+                doi=external.get("DOI", ""),
+                journal=journal,
+                cited_by_count=item.get("citationCount") or 0,
+                relevance_score=100,
+                authors=authors,
+                pdf_url=pdf.get("url", ""),
+                landing_page_url=item.get("url", ""),
+                is_oa=bool(item.get("isOpenAccess")),
+            )
+        )
+    return articles
+
+
+def search_crossref(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    filters = ["type:journal-article"]
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        filters.append(f"from-pub-date:{from_year}-01-01")
+    data = request_json(
+        "https://api.crossref.org/works",
+        {"query.bibliographic": keyword, "filter": ",".join(filters), "rows": min(limit, 100), "sort": "relevance"},
+        timeout=25,
+    )
+    articles = []
+    for item in data.get("message", {}).get("items", []):
+        year = extract_crossref_year(item)
+        authors = "; ".join(format_crossref_author(author) for author in (item.get("author") or [])[:5])
+        pdf_url = ""
+        for link in item.get("link", []) or []:
+            if "pdf" in (link.get("content-type", "") + link.get("URL", "")).lower():
+                pdf_url = link.get("URL", "")
+                break
+        articles.append(
+            normalize_article(
+                source="Crossref",
+                title=(item.get("title") or ["Untitled"])[0],
+                year=year,
+                doi=item.get("DOI", ""),
+                journal=(item.get("container-title") or [""])[0],
+                cited_by_count=item.get("is-referenced-by-count") or 0,
+                relevance_score=item.get("score") or 0,
+                authors=authors,
+                pdf_url=pdf_url,
+                landing_page_url=item.get("URL", ""),
+                is_oa=bool(pdf_url),
+            )
+        )
+    return articles
+
+
+def extract_crossref_year(item: dict) -> int:
+    for key in ("published-print", "published-online", "published", "issued", "created"):
+        date_parts = item.get(key, {}).get("date-parts")
+        if date_parts and date_parts[0]:
+            return int(date_parts[0][0])
+    return 0
+
+
+def format_crossref_author(author: dict) -> str:
+    return f"{author.get('given', '')} {author.get('family', '')}".strip()
+
+
+def search_pubmed(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    from_year = from_year_filter(recent_years)
+    term = f"{keyword} journal article"
+    if from_year:
+        term += f" AND {from_year}:3000[pdat]"
+    search_data = request_json(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        {"db": "pubmed", "term": term, "retmode": "json", "retmax": min(limit, 100)},
+        timeout=25,
+    )
+    ids = search_data.get("esearchresult", {}).get("idlist", [])
+    if not ids:
+        return []
+    summary_data = request_json(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+        {"db": "pubmed", "id": ",".join(ids), "retmode": "json"},
+        timeout=25,
+    )
+    result = summary_data.get("result", {})
+    articles = []
+    for pmid in ids:
+        item = result.get(pmid, {})
+        articleids = item.get("articleids") or []
+        doi = next((x.get("value", "") for x in articleids if x.get("idtype") == "doi"), "")
+        authors = "; ".join(author.get("name", "") for author in (item.get("authors") or [])[:5] if author.get("name"))
+        pubdate = item.get("pubdate", "")
+        year = int(pubdate[:4]) if pubdate[:4].isdigit() else 0
+        articles.append(
+            normalize_article(
+                source="PubMed",
+                title=item.get("title"),
+                year=year,
+                doi=doi,
+                journal=item.get("fulljournalname", ""),
+                cited_by_count=0,
+                relevance_score=80,
+                authors=authors,
+                landing_page_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            )
+        )
+    return articles
+
+
+def search_eric(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    params = {"search": keyword, "format": "json", "rows": min(limit, 100)}
+    from_year = from_year_filter(recent_years)
+    if from_year:
+        params["publicationdateyear"] = f"{from_year}-3000"
+    data = request_json("https://api.ies.ed.gov/eric/", params, timeout=25)
+    docs = data.get("response", {}).get("docs", []) or data.get("docs", [])
+    articles = []
+    for item in docs:
+        year = item.get("publicationdateyear") or item.get("year") or 0
+        authors = item.get("author") or item.get("authors") or []
+        if isinstance(authors, list):
+            authors = "; ".join(str(author) for author in authors[:5])
+        articles.append(
+            normalize_article(
+                source="ERIC",
+                title=item.get("title"),
+                year=year,
+                doi=item.get("doi", ""),
+                journal=item.get("source", ""),
+                cited_by_count=0,
+                relevance_score=70,
+                authors=str(authors),
+                pdf_url=item.get("pdfurl", "") or item.get("fulltexturl", ""),
+                landing_page_url=item.get("url", "") or item.get("eric_url", ""),
+                is_oa=bool(item.get("pdfurl") or item.get("fulltexturl")),
+            )
+        )
+    return articles
+
+
+def search_doaj(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    data = request_json(f"https://doaj.org/api/search/articles/{quote(keyword)}", {"pageSize": min(limit, 100)}, timeout=25)
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for result in data.get("results", []):
+        bibjson = result.get("bibjson", {})
+        year = bibjson.get("year") or 0
+        if from_year and year and int(year) < from_year:
+            continue
+        identifiers = bibjson.get("identifier") or []
+        doi = next((item.get("id", "") for item in identifiers if item.get("type") == "doi"), "")
+        links = bibjson.get("link") or []
+        pdf_url = next((item.get("url", "") for item in links if item.get("type") == "fulltext"), "")
+        authors = "; ".join(author.get("name", "") for author in (bibjson.get("author") or [])[:5] if author.get("name"))
+        journal = (bibjson.get("journal") or {}).get("title", "")
+        articles.append(
+            normalize_article(
+                source="DOAJ",
+                title=bibjson.get("title"),
+                year=year,
+                doi=doi,
+                journal=journal,
+                cited_by_count=0,
+                relevance_score=65,
+                authors=authors,
+                pdf_url=pdf_url,
+                landing_page_url=pdf_url,
+                is_oa=True,
+            )
+        )
+    return articles
+
+
+def search_arxiv(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    response = requests.get(
+        "https://export.arxiv.org/api/query",
+        params={"search_query": f"all:{keyword}", "start": 0, "max_results": min(limit, 50), "sortBy": "relevance"},
+        timeout=25,
+    )
+    response.raise_for_status()
+    root = ET.fromstring(response.text)
+    ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for entry in root.findall("atom:entry", ns):
+        title = entry.findtext("atom:title", default="", namespaces=ns)
+        published = entry.findtext("atom:published", default="", namespaces=ns)
+        year = int(published[:4]) if published[:4].isdigit() else 0
+        if from_year and year and year < from_year:
+            continue
+        authors = "; ".join(author.findtext("atom:name", default="", namespaces=ns) for author in entry.findall("atom:author", ns)[:5])
+        arxiv_id = entry.findtext("atom:id", default="", namespaces=ns)
+        pdf_url = ""
+        for link in entry.findall("atom:link", ns):
+            if link.attrib.get("title") == "pdf":
+                pdf_url = link.attrib.get("href", "")
+        articles.append(
+            normalize_article(
+                source="arXiv",
+                title=title,
+                year=year,
+                journal="arXiv",
+                relevance_score=60,
+                authors=authors,
+                pdf_url=pdf_url,
+                landing_page_url=arxiv_id,
+                is_oa=bool(pdf_url),
+            )
+        )
+    return articles
+
+
+def get_core_api_key() -> str:
+    try:
+        return str(st.secrets.get("CORE_API_KEY", ""))
+    except Exception:
+        return os.getenv("CORE_API_KEY", "")
+
+
+def search_core(keyword: str, limit: int, recent_years: int | None) -> list[dict]:
+    api_key = get_core_api_key()
+    if not api_key:
+        return []
+    headers = {"Authorization": f"Bearer {api_key}"}
+    data = request_json("https://api.core.ac.uk/v3/search/works", {"q": keyword, "limit": min(limit, 100)}, headers=headers, timeout=25)
+    from_year = from_year_filter(recent_years)
+    articles = []
+    for item in data.get("results", []):
+        year = item.get("yearPublished") or 0
+        if from_year and year and int(year) < from_year:
+            continue
+        authors = "; ".join(author.get("name", "") for author in (item.get("authors") or [])[:5] if author.get("name"))
+        download_url = item.get("downloadUrl") or ""
+        articles.append(
+            normalize_article(
+                source="CORE",
+                title=item.get("title"),
+                year=year,
+                doi=item.get("doi", ""),
+                journal=(item.get("journals") or [{}])[0].get("title", "") if item.get("journals") else "",
+                relevance_score=55,
+                authors=authors,
+                pdf_url=download_url,
+                landing_page_url=item.get("sourceFulltextUrls", [""])[0] if item.get("sourceFulltextUrls") else "",
+                is_oa=bool(download_url),
+            )
+        )
+    return articles
+
+
+SOURCE_FUNCTIONS = {
+    "OpenAlex": search_openalex,
+    "Semantic Scholar": search_semantic_scholar,
+    "Crossref": search_crossref,
+    "PubMed": search_pubmed,
+    "ERIC": search_eric,
+    "DOAJ": search_doaj,
+    "arXiv": search_arxiv,
+    "CORE": search_core,
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_articles(keyword: str, limit: int, recent_years: int | None, sources: tuple[str, ...]) -> tuple[list[dict], dict[str, str]]:
+    article_lists = []
+    errors = {}
+    for source in sources:
+        search_fn = SOURCE_FUNCTIONS.get(source)
+        if not search_fn:
+            continue
+        try:
+            article_lists.append(search_fn(keyword, limit, recent_years))
+        except Exception as exc:
+            errors[source] = str(exc)
+    return merge_articles(article_lists, limit), errors
 
 
 def pdf_filename(article: dict) -> str:
     year = article["year"] or "Unknown_Year"
     title = clean_filename(article["title"])
     return f"{year} {title}.pdf"
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_articles(keyword: str, limit: int = 25, recent_years: int | None = 5) -> list[dict]:
-    url = "https://api.openalex.org/works"
-    filters = ["type:article"]
-    if recent_years:
-        from_year = datetime.now().year - recent_years + 1
-        filters.append(f"from_publication_date:{from_year}-01-01")
-
-    params = {
-        "search": keyword,
-        "filter": ",".join(filters),
-        "per-page": min(max(limit * 2, 25), 200),
-    }
-    response = requests.get(url, params=params, timeout=25)
-    response.raise_for_status()
-
-    articles = []
-    for work in response.json().get("results", []):
-        doi_url = work.get("doi") or ""
-        doi = doi_url.replace("https://doi.org/", "") if doi_url else ""
-        best_oa = work.get("best_oa_location") or {}
-        primary = work.get("primary_location") or {}
-        source = (primary.get("source") or {}).get("display_name", "")
-        year = work.get("publication_year") or 0
-
-        articles.append(
-            {
-                "title": work.get("title") or "Untitled",
-                "year": year,
-                "doi": doi,
-                "journal": source,
-                "cited_by_count": work.get("cited_by_count") or 0,
-                "relevance_score": normalize_relevance(work),
-                "authors": format_authors(work.get("authorships") or []),
-                "pdf_url": best_oa.get("pdf_url") or "",
-                "landing_page_url": best_oa.get("landing_page_url") or doi_url,
-                "is_oa": bool(work.get("open_access", {}).get("is_oa")),
-            }
-        )
-
-    articles.sort(key=lambda item: (-item["relevance_score"], -int(item["year"] or 0)))
-    return articles[:limit]
 
 
 def action_link(label: str, url: str, class_name: str, extra_class: str = "", download_name: str = "") -> str:
@@ -221,6 +602,7 @@ def render_article_actions(article: dict, index: int) -> None:
     encoded_doi = base64.b64encode(article["doi"].encode("utf-8")).decode("ascii")
     pdf_button = pdf_link_for_article(article, button_class)
     source_button = action_link("開啟來源", article["landing_page_url"], button_class) if article["landing_page_url"] else ""
+    scholar_button = action_link("Google Scholar", google_scholar_url(article), button_class)
 
     components.html(
         f"""
@@ -281,6 +663,7 @@ def render_article_actions(article: dict, index: int) -> None:
           <button class="{button_class}" id="copy-{key}">複製</button>
           {pdf_button}
           {source_button}
+          {scholar_button}
         </div>
         <script>
           const button = document.getElementById("copy-{key}");
@@ -296,9 +679,48 @@ def render_article_actions(article: dict, index: int) -> None:
     )
 
 
+def google_scholar_url(article: dict) -> str:
+    query = article["doi"] or article["title"]
+    return f"https://scholar.google.com/scholar?q={quote_plus(query)}"
+
+
+def external_search_links(keyword: str) -> dict[str, str]:
+    q = quote_plus(keyword)
+    return {
+        "Google Scholar": f"https://scholar.google.com/scholar?q={q}",
+        "Web of Science": f"https://www.webofscience.com/wos/woscc/basic-search",
+        "Scopus": f"https://www.scopus.com/search/form.uri",
+        "CORE": f"https://core.ac.uk/search?q={q}",
+        "BASE": f"https://www.base-search.net/Search/Results?lookfor={q}",
+        "ResearchGate": f"https://www.researchgate.net/search/publication?q={q}",
+        "SSRN": f"https://www.ssrn.com/index.cfm/en/search-results/?term={q}",
+        "OSF": f"https://osf.io/search/?q={q}",
+        "ScienceDirect": f"https://www.sciencedirect.com/search?qs={q}",
+        "SpringerLink": f"https://link.springer.com/search?query={q}",
+        "Taylor & Francis": f"https://www.tandfonline.com/action/doSearch?AllField={q}",
+        "Emerald": f"https://www.emerald.com/insight/search?q={q}",
+        "SAGE": f"https://journals.sagepub.com/action/doSearch?AllField={q}",
+        "Wiley": f"https://onlinelibrary.wiley.com/action/doSearch?AllField={q}",
+        "IEEE Xplore": f"https://ieeexplore.ieee.org/search/searchresult.jsp?queryText={q}",
+        "ACM DL": f"https://dl.acm.org/action/doSearch?AllField={q}",
+        "Institutional Repositories": f"https://www.google.com/search?q={q}+filetype%3Apdf+institutional+repository",
+    }
+
+
+def render_external_search_links(keyword: str) -> None:
+    if not keyword:
+        return
+    with st.expander("外部資料庫搜尋入口（需手動開啟或需要授權）", expanded=False):
+        links = external_search_links(keyword)
+        cols = st.columns(4)
+        for idx, (label, url) in enumerate(links.items()):
+            with cols[idx % 4]:
+                st.link_button(label, url)
+
+
 def render_article(article: dict, index: int) -> None:
     with st.container(border=True):
-        top_cols = st.columns([0.7, 4.6, 1, 1, 1])
+        top_cols = st.columns([0.7, 4.3, 1, 1, 1])
         top_cols[0].metric("年份", article["year"] or "N/A")
         top_cols[1].markdown(f"**{article['title']}**")
         top_cols[2].metric("相關性", f"{article['relevance_score']:.1f}")
@@ -308,6 +730,7 @@ def render_article(article: dict, index: int) -> None:
         st.caption(article["authors"] or "作者資料未提供")
         if article["journal"]:
             st.write(f"期刊：{article['journal']}")
+        st.caption("來源：" + "、".join(article["sources"]))
 
         render_article_actions(article, index)
 
@@ -316,10 +739,10 @@ render_login_gate()
 render_logout_button()
 
 st.title("期刊文章電子檔查找系統")
-st.write("輸入研究構面或關鍵字，優先列出相關性高且年份新的文章。")
+st.write("輸入研究構面或關鍵字，整合多個合法學術資料來源搜尋文章。")
 
 with st.form("search-form"):
-    cols = st.columns([4, 1, 1])
+    cols = st.columns([3, 1, 1])
     keyword = cols[0].text_input(
         "關鍵字或研究構面",
         placeholder="例如：transformational leadership creativity",
@@ -327,6 +750,7 @@ with st.form("search-form"):
     )
     recent_choice = cols[1].selectbox("年份範圍", ["近 5 年", "近 3 年", "近 10 年", "不限年份"], index=0)
     limit = cols[2].selectbox("筆數", [10, 25, 50], index=1)
+    selected_sources = st.multiselect("API 搜尋來源", API_SOURCES, default=["OpenAlex", "Semantic Scholar", "Crossref", "DOAJ"])
     submitted = st.form_submit_button("搜尋")
 
 recent_year_map = {
@@ -336,21 +760,23 @@ recent_year_map = {
     "不限年份": None,
 }
 
-st.info("排序規則：先依 OpenAlex 相關性分數由高到低，再依年份由新到舊。有合法開放 PDF 時按鈕直接開 PDF；沒有合法 PDF URL 時，淡紅色按鈕會開啟本機 localhost:8000 DOI 路徑。")
+st.info("API 來源會自動彙整與去重；Google Scholar、Web of Science、Scopus、ResearchGate、SSRN、出版社與機構典藏提供外部搜尋入口，不做爬蟲。")
 
 if submitted and not keyword.strip():
     st.warning("請先輸入關鍵字或研究構面。")
 
 if submitted and keyword.strip():
-    with st.spinner("正在搜尋文章..."):
-        try:
-            results = search_articles(keyword.strip(), limit, recent_year_map[recent_choice])
-        except requests.RequestException as exc:
-            st.error(f"搜尋失敗：{exc}")
-            results = []
+    render_external_search_links(keyword.strip())
+    with st.spinner("正在搜尋多個學術資料來源..."):
+        results, errors = search_articles(keyword.strip(), limit, recent_year_map[recent_choice], tuple(selected_sources))
+
+    if errors:
+        with st.expander("部分來源搜尋失敗"):
+            for source, message in errors.items():
+                st.write(f"{source}: {message}")
 
     if not results:
-        st.warning("找不到結果，請改用英文關鍵字、同義詞或更具體的研究構面名稱。")
+        st.warning("找不到結果，請改用英文關鍵字、同義詞或更具體的研究構面名稱，或使用外部資料庫搜尋入口。")
     else:
         st.subheader(f"搜尋結果：{keyword.strip()}")
         st.caption(f"共顯示 {len(results)} 筆。年份範圍：{recent_choice}。")
