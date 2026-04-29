@@ -867,7 +867,7 @@ def pdf_link_for_article(article: dict, class_name: str) -> str:
     if article["pdf_url"]:
         return action_link("PDF電子檔", article["pdf_url"], class_name, "available-pdf", download_name)
     if article["doi"]:
-        return action_link("PDF電子檔", f"https://www.pismin.com/{article['doi']}", class_name, "missing-pdf", download_name)
+        return action_link("PDF電子檔", f"http://localhost:8000/{article['doi']}", class_name, "missing-pdf", download_name)
     return f'<span class="{class_name} missing-pdf disabled">PDF電子檔</span>'
 
 
